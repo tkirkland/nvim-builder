@@ -4,12 +4,15 @@ A secure bash script that compiles Neovim from source and creates a Debian packa
 
 ## Features
 
-- 🔧 **Automated Build**: Compiles Neovim from source with optimized settings
-- 📦 **Package Creation**: Creates installable .deb packages using checkinstall
-- 🔗 **System Integration**: Registers vi/vim/editor alternatives automatically
-- 🛡️ **Security Hardened**: Input validation and injection protection
+- 🔧 **Automated Build**: Compiles Neovim from source with multi-core optimization
+- 📦 **Modern Package Creation**: Uses dpkg-deb instead of checkinstall for better security
+- 🚫 **No Root Required**: Build process runs without root privileges
+- 🔄 **Auto Dependencies**: Automatically installs missing build dependencies
+- 🔗 **System Integration**: Registers vi/vim/editor alternatives automatically  
+- 🛡️ **Security Hardened**: Input validation and rootless build process
 - ⚙️ **Configurable**: Customizable install prefix, build type, and package name
-- 🧹 **Clean Build**: Uses temporary directories with automatic cleanup
+- 🧹 **Clean Output**: Minimal spam with clear status messages
+- ⚡ **Fast Build**: Multi-core compilation for faster builds
 
 ## Quick Start
 
@@ -24,20 +27,23 @@ sudo dpkg -i neovim_*.deb
 ## Requirements
 
 ### System Dependencies
-The script will check for and guide you to install:
+The script automatically installs missing dependencies:
 - `git` - Version control
 - `cmake` - Build system
 - `ninja-build` - Build tool
 - `gettext` - Internationalization
 - `unzip` - Archive extraction
 - `curl` - HTTP client
-- `checkinstall` - Package creation
+- `dpkg-dev` - Debian package tools
+- `fakeroot` - Privilege simulation for packaging
 
-### Install Dependencies (Ubuntu/Debian)
+### Manual Installation (if needed)
 ```bash
 sudo apt-get update
-sudo apt-get install git cmake ninja-build gettext unzip curl checkinstall
+sudo apt-get install git cmake ninja-build gettext unzip curl dpkg-dev fakeroot
 ```
+
+> **Note**: The script will automatically install any missing dependencies when you run it.
 
 ## Usage
 
@@ -76,27 +82,35 @@ sudo apt-get install git cmake ninja-build gettext unzip curl checkinstall
 
 ## What It Does
 
-1. **Validates Dependencies**: Checks for required build tools
-2. **Sets Up Environment**: Creates secure temporary build directory
+1. **Auto-Installs Dependencies**: Automatically installs any missing build tools
+2. **Sets Up Environment**: Creates secure temporary build directory  
 3. **Downloads Source**: Clones Neovim repository and checks out stable branch
-4. **Compiles**: Builds Neovim with specified configuration
-5. **Creates Package**: Uses checkinstall to create .deb with maintainer scripts
-6. **Registers Alternatives**: Sets up system alternatives for vi, vim, editor commands
-7. **Cleanup**: Removes temporary files and sets proper ownership
+4. **Multi-Core Compilation**: Builds Neovim using all available CPU cores
+5. **Creates Package Structure**: Uses DESTDIR to create proper package layout
+6. **Generates .deb Package**: Uses dpkg-deb for secure, rootless package creation
+7. **No Installation**: Only creates the package - you choose when to install
+8. **Cleanup**: Removes temporary files and ensures proper ownership
 
 ## System Integration
 
 ### Alternatives Registration
-The package automatically registers Neovim as an alternative for:
+When you install the package, it automatically registers Neovim as an alternative for:
 - `vi` - Traditional vi editor
-- `vim` - Vim editor
+- `vim` - Vim editor  
 - `vim.tiny` - Minimal vim
 - `editor` - System default editor
 - `ex` - Ex editor mode
 - `view` - Read-only editor
-- `rview` - Restricted read-only editor  
+- `rview` - Restricted read-only editor
 - `rvim` - Restricted vim
 - `vimdiff` - Diff tool
+
+The installation shows clean output like:
+```
+/usr/bin/nvim to provide /usr/bin/vi
+/usr/bin/nvim to provide /usr/bin/vim
+/usr/bin/nvim to provide /usr/bin/editor
+```
 
 ### Managing Alternatives
 ```bash
@@ -132,20 +146,24 @@ sudo apt-get purge neovim
 
 ## Security Features
 
+- ✅ **Rootless Build**: No root privileges required during compilation
 - ✅ **Input Validation**: All parameters validated against safe patterns
 - ✅ **Path Sanitization**: Prevents command injection in file operations
-- ✅ **Privilege Control**: Minimal sudo usage with validated inputs
+- ✅ **Minimal Privileges**: Only uses sudo for dependency installation and final package installation
+- ✅ **Standard Tools**: Uses only built-in Debian packaging tools
 - ✅ **Secure Defaults**: Safe temporary directories and file permissions
 
 ## Troubleshooting
 
 ### Build Fails
 ```bash
-# Check dependencies
-./build_nvim.sh 2>&1 | grep -i "missing"
+# The script auto-installs dependencies, but if issues persist:
 
-# Clean retry
+# Clean retry with fresh build
 rm -rf /tmp/neovim-* && ./build_nvim.sh
+
+# Check for specific errors in build output
+./build_nvim.sh 2>&1 | grep -i "error"
 ```
 
 ### Permission Errors
@@ -169,10 +187,29 @@ sudo update-alternatives --remove-all editor
 ## Output
 
 The script creates:
-- **Package**: `neovim_<version>-1_<arch>.deb` in script directory
-- **Binary**: `/usr/bin/nvim` (or custom prefix)
-- **Man Pages**: `/usr/share/man/man1/nvim.1.gz`
-- **Alternatives**: System-wide editor alternatives
+- **Package**: `neovim_<version>_<arch>.deb` in script directory
+- **Binary**: `/usr/bin/nvim` (or custom prefix) - *only after installation*
+- **Man Pages**: `/usr/share/man/man1/nvim.1.gz` - *only after installation*
+- **Alternatives**: System-wide editor alternatives - *only after installation*
+
+## Build vs Install
+
+This script **only builds** the .deb package. It does **not** install Neovim on your system.
+
+### To Install After Building:
+```bash
+# Install the package you just built
+sudo dpkg -i neovim_*.deb
+
+# Fix any dependency issues (if needed)
+sudo apt-get install -f
+```
+
+### Why Separate Build and Install?
+- **Security**: You control when system changes happen
+- **Testing**: You can examine the package before installing
+- **Distribution**: You can copy the .deb to other systems
+- **Safety**: No risk of breaking your current editor setup during build
 
 ## Contributing
 
