@@ -3,7 +3,7 @@
 # Neovim .deb Build Script
 # This script compiles Neovim from source and creates a .deb package
 
-set -e # Trap errors
+set -e
 
 # Configuration
 INSTALL_PREFIX="/usr"
@@ -55,7 +55,8 @@ check_dependencies() {
      ["gettext"]="gettext"
      ["unzip"]="unzip"
      ["curl"]="curl"
-     ["checkinstall"]="checkinstall"
+     ["dpkg-deb"]="dpkg-dev"
+     ["fakeroot"]="fakeroot"
   )
 
   for cmd in "${!deps[@]}"; do
@@ -66,13 +67,29 @@ check_dependencies() {
   done
 
   if [ ${#missing_deps[@]} -ne 0 ]; then
-    print_error "Missing dependencies: ${missing_deps[*]}"
-    print_status "Install them with:"
-    echo "sudo apt-get install ${missing_packages[*]}"
-    exit 1
+    print_warning "Missing dependencies: ${missing_deps[*]}"
+    print_status "Installing missing packages: ${missing_packages[*]}"
+    
+    # Update package lists first
+    print_status "Updating package lists..."
+    if ! sudo apt-get update > /dev/null 2>&1; then
+      print_error "Failed to update package lists"
+      exit 1
+    fi
+    
+    # Install missing packages
+    print_status "Installing packages..."
+    if ! sudo apt-get install -y "${missing_packages[@]}" > /dev/null 2>&1; then
+      print_error "Failed to install missing packages: ${missing_packages[*]}"
+      print_status "You can install them manually with:"
+      echo "sudo apt-get install ${missing_packages[*]}"
+      exit 1
+    fi
+    
+    print_success "Successfully installed missing dependencies"
   fi
 
-  print_success "All dependencies found"
+  print_success "All dependencies are available"
 }
 
 cleanup_old_files() {
@@ -116,20 +133,20 @@ clone_or_update_repo() {
 
   if [ ! -d "neovim" ]; then
     print_status "Cloning Neovim repository to $BUILD_DIR..."
-    git clone https://github.com/neovim/neovim.git
+    git clone https://github.com/neovim/neovim.git > /dev/null 2>&1
     cd neovim
   else
     print_status "Using existing Neovim repository in $BUILD_DIR..."
     cd neovim
-    git fetch origin
+    git fetch origin > /dev/null 2>&1
   fi
 }
 
 checkout_version() {
   if [ "$CHECKOUT_STABLE" = true ]; then
     print_status "Checking out stable branch..."
-    git checkout stable
-    git pull origin stable
+    git checkout stable > /dev/null 2>&1
+    git pull origin stable > /dev/null 2>&1
   else
     print_status "Using current branch/commit"
   fi
@@ -141,15 +158,43 @@ checkout_version() {
 
 build_neovim() {
   print_status "Cleaning previous build..."
-  make distclean 2> /dev/null || true
+  make distclean > /dev/null 2>&1 || true
 
   print_status "Building Neovim..."
   print_status "Install prefix: $INSTALL_PREFIX"
   print_status "Build type: $BUILD_TYPE"
 
-  make CMAKE_BUILD_TYPE="$BUILD_TYPE" CMAKE_INSTALL_PREFIX="$INSTALL_PREFIX"
+  make -j"$(nproc)" CMAKE_BUILD_TYPE="$BUILD_TYPE" CMAKE_INSTALL_PREFIX="$INSTALL_PREFIX" > /dev/null 2>&1
 
   print_success "Build completed successfully"
+}
+
+create_package_structure() {
+  print_status "Creating package directory structure..."
+  
+  local version
+  version=$(git describe --tags | sed 's/^v//')
+  
+  # Validate version string for package safety
+  if [[ ! $version =~ ^[a-zA-Z0-9][a-zA-Z0-9+.~-]*$ ]]; then
+    print_error "Invalid version format: $version. Contains unsafe characters."
+    exit 1
+  fi
+  
+  # Create package directory structure
+  PACKAGE_DIR="$BUILD_DIR/${PACKAGE_NAME}_${version}_$(dpkg --print-architecture)"
+  DEBIAN_DIR="$PACKAGE_DIR/DEBIAN"
+  
+  print_status "Package directory: $PACKAGE_DIR"
+  
+  # Clean and create a package directory
+  rm -rf "$PACKAGE_DIR"
+  mkdir -p "$DEBIAN_DIR"
+  
+  # Install to package directory using DESTDIR
+  print_status "Installing Neovim to package directory..."
+  make install CMAKE_INSTALL_PREFIX="$INSTALL_PREFIX" DESTDIR="$PACKAGE_DIR" > /dev/null 2>&1
+  print_success "Package structure created successfully"
 }
 
 create_maintainer_scripts() {
@@ -163,18 +208,17 @@ create_maintainer_scripts() {
   nvim_path_escaped=$(printf '%s\n' "$nvim_path" | sed "s/[[\.\*^$()+?{|]/\\&/g")
   nvim_manpage_escaped=$(printf '%s\n' "$nvim_manpage" | sed "s/[[\.\*^$()+?{|]/\\&/g")
 
-  # Create scripts in the current directory (should be BUILD_DIR/neovim)
-  print_status "Creating scripts in: $(pwd)"
+  # Create scripts in the DEBIAN directory
+  print_status "Creating scripts in: $DEBIAN_DIR"
 
-  # Create postinstall-pak script (runs after package installation)
-  cat > postinstall-pak << 'EOF'
+  # Create a postinst script (runs after package installation)
+  cat > "$DEBIAN_DIR/postinst" << 'EOF'
 #!/bin/bash
 set -e
 
 NVIM_PATH="__NVIM_PATH__"
 NVIM_MANPAGE="__NVIM_MANPAGE__"
 
-echo "Setting up neovim alternatives..."
 
 # Function to safely register alternatives
 register_alternative() {
@@ -215,7 +259,7 @@ register_alternative() {
     
     # Execute the command
     if eval $cmd 2>/dev/null; then
-        echo "update-alternatives: using $path to provide $link ($name) in auto mode"
+        echo "$path to provide $link"
         return 0
     else
         echo "Warning: Failed to register $name alternative"
@@ -252,32 +296,17 @@ register_alternative "rvim" "/usr/bin/rvim" "$NVIM_PATH" 60 \
 register_alternative "vimdiff" "/usr/bin/vimdiff" "$NVIM_PATH" 60 \
     "/usr/share/man/man1/vimdiff.1.gz" "vimdiff.1.gz" "$NVIM_MANPAGE"
 
-echo ""
-echo "Neovim has been registered as an alternative for: vi, vim, vim.tiny, editor, ex, view, rview, rvim, vimdiff"
-echo ""
-echo "Current alternatives status:"
-for alt in vi vim vim.tiny editor ex view rview rvim vimdiff; do
-    if update-alternatives --query $alt >/dev/null 2>&1; then
-        current=$(update-alternatives --query $alt 2>/dev/null | grep "Value:" | awk '{print $2}')
-        if [ "$current" = "$NVIM_PATH" ]; then
-            echo "  $alt → $current [*neovim*]"
-        else
-            echo "  $alt → $current"
-        fi
-    fi
-done
-echo ""
 echo "To change defaults: sudo update-alternatives --config <command>"
 
 exit 0
 EOF
 
-  # Replace placeholders in a postinstall script with escaped paths
-  sed -i "s|__NVIM_PATH__|$nvim_path_escaped|g" postinstall-pak
-  sed -i "s|__NVIM_MANPAGE__|$nvim_manpage_escaped|g" postinstall-pak
+  # Replace placeholders in a postinst script with escaped paths
+  sed -i "s|__NVIM_PATH__|$nvim_path_escaped|g" "$DEBIAN_DIR/postinst"
+  sed -i "s|__NVIM_MANPAGE__|$nvim_manpage_escaped|g" "$DEBIAN_DIR/postinst"
 
-  # Create preremove-pak script (runs before package removal)
-  cat > preremove-pak << 'EOF'
+  # Create prerm script (runs before package removal)
+  cat > "$DEBIAN_DIR/prerm" << 'EOF'
 #!/bin/bash
 set -e
 
@@ -315,11 +344,11 @@ fi
 exit 0
 EOF
 
-  # Replace placeholders in a preremove script with an escaped path
-  sed -i "s|__NVIM_PATH__|$nvim_path_escaped|g" preremove-pak
+  # Replace placeholders in a prerm script with an escaped path
+  sed -i "s|__NVIM_PATH__|$nvim_path_escaped|g" "$DEBIAN_DIR/prerm"
 
-  # Create postremove-pak script (runs after package removal)
-  cat > postremove-pak << 'EOF'
+  # Create postrm script (runs after package removal)
+  cat > "$DEBIAN_DIR/postrm" << 'EOF'
 #!/bin/bash
 set -e
 
@@ -344,19 +373,46 @@ fi
 exit 0
 EOF
 
-  # Replace placeholders in a postremove script with an escaped path
-  sed -i "s|__NVIM_PATH__|$nvim_path_escaped|g" postremove-pak
+  # Replace placeholders in a postrm script with an escaped path
+  sed -i "s|__NVIM_PATH__|$nvim_path_escaped|g" "$DEBIAN_DIR/postrm"
 
   # Make scripts executable
-  chmod 755 postinstall-pak preremove-pak postremove-pak
+  chmod 755 "$DEBIAN_DIR/postinst" "$DEBIAN_DIR/prerm" "$DEBIAN_DIR/postrm"
 
   # Verify scripts were created
-  if [ -f postinstall-pak ] && [ -f preremove-pak ] && [ -f postremove-pak ]; then
+  if [ -f "$DEBIAN_DIR/postinst" ] && [ -f "$DEBIAN_DIR/prerm" ] && [ -f "$DEBIAN_DIR/postrm" ]; then
     print_success "Maintainer scripts created successfully"
   else
     print_error "Failed to create maintainer scripts!"
     return 1
   fi
+}
+
+create_debian_control() {
+  print_status "Creating DEBIAN/control file..."
+  
+  local version
+  version=$(git describe --tags | sed 's/^v//')
+  
+  local description="A hyperextensible Vim-based text editor"
+  
+  cat > "$DEBIAN_DIR/control" << EOF
+Package: $PACKAGE_NAME
+Version: $version
+Architecture: $(dpkg --print-architecture)
+Maintainer: Neovim Build Script <build@localhost>
+Depends: libc6, libgcc-s1, libstdc++6
+Section: editors
+Priority: optional
+Description: $description
+ Neovim is a modern text editor that builds on the heritage of Vim.
+ It focuses on extensibility and usability while keeping the powerful
+ modal editing paradigm that makes Vim unique.
+ .
+ This package was built from source using the nvim-builder script.
+EOF
+
+  print_success "DEBIAN/control file created"
 }
 
 create_deb_package() {
@@ -371,86 +427,58 @@ create_deb_package() {
     exit 1
   fi
 
-  # IMPORTANT: We must be in the neovim build directory for checkinstall
-  # Verify we're in the right directory
+  # We should be in the neovim build directory
   if [ ! -f "Makefile" ] || [ ! -d ".git" ]; then
     print_error "Not in the neovim build directory!"
     pwd
     exit 1
   fi
 
-  # Create maintainer scripts in the current directory (where checkinstall will run)
-  if [ "$REGISTER_ALTERNATIVES" = true ]; then
-    print_status "Creating maintainer scripts in $(pwd)..."
-    create_maintainer_scripts
+  # Create a package structure and install files
+  create_package_structure
 
-    # Verify scripts were created
-    if [ ! -f "postinstall-pak" ] || [ ! -f "preremove-pak" ] || [ ! -f "postremove-pak" ]; then
+  # Create a DEBIAN/control file
+  create_debian_control
+
+  # Create maintainer scripts if alternatives are enabled
+  if [ "$REGISTER_ALTERNATIVES" = true ]; then
+    if ! create_maintainer_scripts; then
       print_error "Failed to create maintainer scripts!"
       exit 1
     fi
-
-    print_status "Maintainer scripts created successfully"
-    ls -la ./*install-pak ./*remove-pak
   fi
 
-  # Run checkinstall (it will pick up the maintainer scripts from the current directory)
-  sudo checkinstall \
-    --pkgname="$PACKAGE_NAME" \
-    --pkgversion="$version" \
-    --backup=no \
-    --deldoc=yes \
-    --fstrans=no \
-    --default \
-    make install
-
-  # Clean up maintainer scripts after package creation
-  if [ "$REGISTER_ALTERNATIVES" = true ]; then
-    print_status "Cleaning up maintainer scripts..."
-    rm -f postinstall-pak preinstall-pak preremove-pak postremove-pak
-  fi
-
-  # Move .deb file to script directory and change ownership
+  # Build the package using dpkg-deb
+  print_status "Building .deb package with dpkg-deb..."
+  
   local deb_file
-  deb_file="${PACKAGE_NAME}_${version}-1_$(dpkg --print-architecture).deb"
-  if [ -f "$deb_file" ]; then
-    print_status "Moving .deb to script directory and setting ownership..."
-    mv "$deb_file" "$SCRIPT_DIR/"
-    chown "$ORIGINAL_USER:$ORIGINAL_GROUP" "$SCRIPT_DIR/$deb_file"
-    print_success ".deb package created at: $SCRIPT_DIR/$deb_file"
-
-    # Verify alternatives scripts are in the package
-    if [ "$REGISTER_ALTERNATIVES" = true ]; then
-      print_status "Verifying maintainer scripts in package..."
-      if dpkg-deb --info "$SCRIPT_DIR/$deb_file" | grep -q "postinst"; then
-        print_success "Maintainer scripts successfully included in .deb"
-      else
-        print_warning "Maintainer scripts may not be included in .deb!"
-      fi
-    fi
+  deb_file=$(basename "$PACKAGE_DIR").deb
+  
+  # Use fakeroot or --root-owner-group for proper ownership
+  if command -v fakeroot &> /dev/null; then
+    print_status "Using fakeroot for package creation..."
+    fakeroot dpkg-deb --build "$PACKAGE_DIR" "$BUILD_DIR/$deb_file" > /dev/null 2>&1
   else
-    # Fallback: find any .deb file created
-    local found_deb
-    found_deb=$(find . -name "*.deb" -type f | head -1)
-    if [ -n "$found_deb" ]; then
-      print_status "Moving .deb to script directory and setting ownership..."
-      mv "$found_deb" "$SCRIPT_DIR/"
-      chown "$ORIGINAL_USER:$ORIGINAL_GROUP" "$SCRIPT_DIR/$(basename "$found_deb")"
-      print_success ".deb package created at: $SCRIPT_DIR/$(basename "$found_deb")"
-
-      # Verify alternatives scripts are in the package
-      if [ "$REGISTER_ALTERNATIVES" = true ]; then
-        print_status "Verifying maintainer scripts in package..."
-        if dpkg-deb --info "$SCRIPT_DIR/$(basename "$found_deb")" | grep -q "postinst"; then
-          print_success "Maintainer scripts successfully included in .deb"
-        else
-          print_warning "Maintainer scripts may not be included in .deb!"
-        fi
-      fi
-    else
-      print_warning "Could not find created .deb file"
-    fi
+    print_status "Using dpkg-deb with --root-owner-group..."
+    dpkg-deb --build --root-owner-group "$PACKAGE_DIR" "$BUILD_DIR/$deb_file" > /dev/null 2>&1
   fi
+
+  if [ -f "$BUILD_DIR/$deb_file" ]; then
+    print_success ".deb package created: $deb_file"
+
+    # Move to the script directory and fix ownership
+    print_status "Moving .deb package to script directory..."
+    cp "$BUILD_DIR/$deb_file" "$SCRIPT_DIR/"
+    chown "$ORIGINAL_USER:$ORIGINAL_GROUP" "$SCRIPT_DIR/$deb_file"
+
+    print_success "Package available at: $SCRIPT_DIR/$deb_file"
+
+  else
+    print_error "Failed to create .deb package!"
+    exit 1
+  fi
+
+  print_success ".deb package creation completed"
 }
 
 register_alternatives() {
@@ -486,14 +514,6 @@ verify_installation() {
       print_status "Note: Alternatives are managed by the .deb package"
     fi
 
-    # List created .deb files in the script directory
-    local deb_files=("$SCRIPT_DIR"/neovim*.deb)
-    if [ -e "${deb_files[0]}" ]; then
-      print_success "Created .deb file(s) in script directory:"
-      for deb in "${deb_files[@]}"; do
-        echo "  $(basename "$deb") (owned by $ORIGINAL_USER:$ORIGINAL_GROUP)"
-      done
-    fi
   else
     print_error "Neovim installation verification failed"
     exit 1
@@ -610,13 +630,11 @@ main() {
   checkout_version
   build_neovim
   create_deb_package
-  register_alternatives
-  verify_installation
 
   print_success "Build process completed successfully!"
-  print_status "To uninstall: sudo apt remove $PACKAGE_NAME"
+  print_status "To install: sudo dpkg -i $SCRIPT_DIR/neovim_*.deb"
   if [ "$REGISTER_ALTERNATIVES" = true ]; then
-    print_status "Alternatives will be automatically removed on uninstall"
+    print_status "Alternatives will be registered automatically during installation"
   fi
 }
 
