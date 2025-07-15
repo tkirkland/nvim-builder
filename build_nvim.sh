@@ -3,7 +3,7 @@
 # Neovim .deb Build Script
 # This script compiles Neovim from source and creates a .deb package
 
-set -e # Exit on any error
+set -e # Trap errors
 
 # Configuration
 INSTALL_PREFIX="/usr"
@@ -22,7 +22,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 print_status() {
   echo -e "${BLUE}[INFO]${NC} $1"
@@ -41,6 +41,7 @@ print_error() {
 }
 
 check_dependencies() {
+  local cmd
   print_status "Checking dependencies..."
 
   local missing_deps=()
@@ -48,17 +49,17 @@ check_dependencies() {
 
   # Check for required commands and their corresponding packages
   declare -A deps=(
-    ["git"]="git"
-    ["cmake"]="cmake"
-    ["ninja"]="ninja-build"
-    ["gettext"]="gettext"
-    ["unzip"]="unzip"
-    ["curl"]="curl"
-    ["checkinstall"]="checkinstall"
+     ["git"]="git"
+     ["cmake"]="cmake"
+     ["ninja"]="ninja-build"
+     ["gettext"]="gettext"
+     ["unzip"]="unzip"
+     ["curl"]="curl"
+     ["checkinstall"]="checkinstall"
   )
 
   for cmd in "${!deps[@]}"; do
-    if ! command -v "$cmd" &>/dev/null; then
+    if ! command -v "$cmd" &> /dev/null; then
       missing_deps+=("$cmd")
       missing_packages+=("${deps[$cmd]}")
     fi
@@ -105,7 +106,7 @@ cleanup_build_environment() {
 }
 
 clone_or_update_repo() {
-  # Ensure build directory exists first
+  # Ensure the build directory exists first
   if [ ! -d "$BUILD_DIR" ]; then
     print_error "Build directory $BUILD_DIR does not exist"
     exit 1
@@ -140,7 +141,7 @@ checkout_version() {
 
 build_neovim() {
   print_status "Cleaning previous build..."
-  make distclean 2>/dev/null || true
+  make distclean 2> /dev/null || true
 
   print_status "Building Neovim..."
   print_status "Install prefix: $INSTALL_PREFIX"
@@ -156,17 +157,17 @@ create_maintainer_scripts() {
 
   local nvim_path="$INSTALL_PREFIX/bin/nvim"
   local nvim_manpage="$INSTALL_PREFIX/share/man/man1/nvim.1.gz"
-  
+
   # Escape paths for safe sed substitution
   local nvim_path_escaped nvim_manpage_escaped
-  nvim_path_escaped=$(printf '%s\n' "$nvim_path" | sed 's/[[\.\*^$()+?{|]/\\&/g')
-  nvim_manpage_escaped=$(printf '%s\n' "$nvim_manpage" | sed 's/[[\.\*^$()+?{|]/\\&/g')
+  nvim_path_escaped=$(printf '%s\n' "$nvim_path" | sed "s/[[\.\*^$()+?{|]/\\&/g")
+  nvim_manpage_escaped=$(printf '%s\n' "$nvim_manpage" | sed "s/[[\.\*^$()+?{|]/\\&/g")
 
-  # Create scripts in current directory (should be BUILD_DIR/neovim)
+  # Create scripts in the current directory (should be BUILD_DIR/neovim)
   print_status "Creating scripts in: $(pwd)"
 
   # Create postinstall-pak script (runs after package installation)
-  cat >postinstall-pak <<'EOF'
+  cat > postinstall-pak << 'EOF'
 #!/bin/bash
 set -e
 
@@ -222,42 +223,32 @@ register_alternative() {
     fi
 }
 
-# Register alternatives with slaves (matching vim's behavior)
 echo "Registering neovim alternatives..."
 
-# vi alternative with slaves
 register_alternative "vi" "/usr/bin/vi" "$NVIM_PATH" 60 \
     "/usr/share/man/man1/vi.1.gz" "vi.1.gz" "$NVIM_MANPAGE"
 
-# vim alternative with slaves
 register_alternative "vim" "/usr/bin/vim" "$NVIM_PATH" 60 \
     "/usr/share/man/man1/vim.1.gz" "vim.1.gz" "$NVIM_MANPAGE"
 
-# vim.tiny alternative
 register_alternative "vim.tiny" "/usr/bin/vim.tiny" "$NVIM_PATH" 60 \
     "/usr/share/man/man1/vim.tiny.1.gz" "vim.tiny.1.gz" "$NVIM_MANPAGE"
 
-# editor alternative
 register_alternative "editor" "/usr/bin/editor" "$NVIM_PATH" 60 \
     "/usr/share/man/man1/editor.1.gz" "editor.1.gz" "$NVIM_MANPAGE"
 
-# ex alternative (matching vim's behavior)
 register_alternative "ex" "/usr/bin/ex" "$NVIM_PATH" 60 \
     "/usr/share/man/man1/ex.1.gz" "ex.1.gz" "$NVIM_MANPAGE"
 
-# view alternative (read-only vi)
 register_alternative "view" "/usr/bin/view" "$NVIM_PATH" 60 \
     "/usr/share/man/man1/view.1.gz" "view.1.gz" "$NVIM_MANPAGE"
 
-# rview alternative (read-only vim, matching vim's behavior)
 register_alternative "rview" "/usr/bin/rview" "$NVIM_PATH" 60 \
     "/usr/share/man/man1/rview.1.gz" "rview.1.gz" "$NVIM_MANPAGE"
 
-# rvim alternative (restricted vim, matching vim's behavior)
 register_alternative "rvim" "/usr/bin/rvim" "$NVIM_PATH" 60 \
     "/usr/share/man/man1/rvim.1.gz" "rvim.1.gz" "$NVIM_MANPAGE"
 
-# vimdiff alternative (matching vim's behavior)
 register_alternative "vimdiff" "/usr/bin/vimdiff" "$NVIM_PATH" 60 \
     "/usr/share/man/man1/vimdiff.1.gz" "vimdiff.1.gz" "$NVIM_MANPAGE"
 
@@ -269,9 +260,9 @@ for alt in vi vim vim.tiny editor ex view rview rvim vimdiff; do
     if update-alternatives --query $alt >/dev/null 2>&1; then
         current=$(update-alternatives --query $alt 2>/dev/null | grep "Value:" | awk '{print $2}')
         if [ "$current" = "$NVIM_PATH" ]; then
-            echo "  $alt -> $current [*neovim*]"
+            echo "  $alt → $current [*neovim*]"
         else
-            echo "  $alt -> $current"
+            echo "  $alt → $current"
         fi
     fi
 done
@@ -281,12 +272,12 @@ echo "To change defaults: sudo update-alternatives --config <command>"
 exit 0
 EOF
 
-  # Replace placeholders in postinstall script with escaped paths
+  # Replace placeholders in a postinstall script with escaped paths
   sed -i "s|__NVIM_PATH__|$nvim_path_escaped|g" postinstall-pak
   sed -i "s|__NVIM_MANPAGE__|$nvim_manpage_escaped|g" postinstall-pak
 
   # Create preremove-pak script (runs before package removal)
-  cat >preremove-pak <<'EOF'
+  cat > preremove-pak << 'EOF'
 #!/bin/bash
 set -e
 
@@ -324,11 +315,11 @@ fi
 exit 0
 EOF
 
-  # Replace placeholders in preremove script with escaped path
+  # Replace placeholders in a preremove script with an escaped path
   sed -i "s|__NVIM_PATH__|$nvim_path_escaped|g" preremove-pak
 
   # Create postremove-pak script (runs after package removal)
-  cat >postremove-pak <<'EOF'
+  cat > postremove-pak << 'EOF'
 #!/bin/bash
 set -e
 
@@ -336,15 +327,13 @@ NVIM_PATH="__NVIM_PATH__"
 
 if [ "$1" = "purge" ]; then
     echo "Purging neovim configuration..."
-    
-    # Final cleanup - ensure no dangling alternatives remain
+
     for alt in vi vim vim.tiny editor ex view rview rvim vimdiff; do
         if update-alternatives --list $alt 2>/dev/null | grep -q "^$NVIM_PATH$"; then
             update-alternatives --remove $alt "$NVIM_PATH" 2>/dev/null || true
         fi
     done
-    
-    # Auto-configure remaining alternatives
+
     for alt in vi vim vim.tiny editor ex view rview rvim vimdiff; do
         if update-alternatives --list $alt >/dev/null 2>&1; then
             update-alternatives --auto $alt 2>/dev/null || true
@@ -355,7 +344,7 @@ fi
 exit 0
 EOF
 
-  # Replace placeholders in postremove script with escaped path
+  # Replace placeholders in a postremove script with an escaped path
   sed -i "s|__NVIM_PATH__|$nvim_path_escaped|g" postremove-pak
 
   # Make scripts executable
@@ -375,9 +364,9 @@ create_deb_package() {
 
   local version
   version=$(git describe --tags | sed 's/^v//')
-  
+
   # Validate version string for package safety
-  if [[ ! "$version" =~ ^[a-zA-Z0-9][a-zA-Z0-9+.~-]*$ ]]; then
+  if [[ ! $version =~ ^[a-zA-Z0-9][a-zA-Z0-9+.~-]*$   ]]; then
     print_error "Invalid version format: $version. Contains unsafe characters."
     exit 1
   fi
@@ -405,7 +394,7 @@ create_deb_package() {
     ls -la ./*install-pak ./*remove-pak
   fi
 
-  # Run checkinstall (it will pick up the maintainer scripts from current directory)
+  # Run checkinstall (it will pick up the maintainer scripts from the current directory)
   sudo checkinstall \
     --pkgname="$PACKAGE_NAME" \
     --pkgversion="$version" \
@@ -472,9 +461,11 @@ register_alternatives() {
 }
 
 verify_installation() {
+  local alt
+  local deb
   print_status "Verifying installation..."
 
-  if command -v nvim &>/dev/null; then
+  if command -v nvim &> /dev/null; then
     local installed_version
     installed_version=$(nvim --version | head -1)
     print_success "Neovim installed successfully: $installed_version"
@@ -488,14 +479,14 @@ verify_installation() {
     if [ "$REGISTER_ALTERNATIVES" = true ]; then
       print_status "Alternative registrations:"
       for alt in vi vim vim.tiny editor ex view rview rvim vimdiff; do
-        if update-alternatives --query $alt 2>/dev/null | grep -q "$INSTALL_PREFIX/bin/nvim"; then
+        if update-alternatives --query $alt 2> /dev/null | grep -q "$INSTALL_PREFIX/bin/nvim"; then
           echo "  $alt -> registered"
         fi
       done
       print_status "Note: Alternatives are managed by the .deb package"
     fi
 
-    # List created .deb files in script directory
+    # List created .deb files in the script directory
     local deb_files=("$SCRIPT_DIR"/neovim*.deb)
     if [ -e "${deb_files[0]}" ]; then
       print_success "Created .deb file(s) in script directory:"
@@ -531,7 +522,7 @@ show_usage() {
 validate_prefix() {
   local prefix="$1"
   # Allow only safe absolute paths with alphanumeric, underscore, hyphen, slash
-  if [[ ! "$prefix" =~ ^/[a-zA-Z0-9/_-]+$ ]]; then
+  if [[ ! $prefix =~ ^/[a-zA-Z0-9/_-]+$   ]]; then
     print_error "Invalid prefix: $prefix. Must be an absolute path with safe characters."
     exit 1
   fi
@@ -540,8 +531,7 @@ validate_prefix() {
 validate_build_type() {
   local build_type="$1"
   case "$build_type" in
-    Release|Debug|RelWithDebInfo|MinSizeRel)
-      ;; # Valid build types
+    Release | Debug | RelWithDebInfo | MinSizeRel) ;; # Valid build types
     *)
       print_error "Invalid build type: $build_type. Must be Release, Debug, RelWithDebInfo, or MinSizeRel."
       exit 1
@@ -552,7 +542,7 @@ validate_build_type() {
 validate_package_name() {
   local package_name="$1"
   # Debian package name rules: lowercase, alphanumeric, plus, hyphen, dot
-  if [[ ! "$package_name" =~ ^[a-z0-9][a-z0-9+.-]*$ ]]; then
+  if [[ ! $package_name =~ ^[a-z0-9][a-z0-9+.-]*$   ]]; then
     print_error "Invalid package name: $package_name. Must follow Debian package naming rules."
     exit 1
   fi
@@ -630,5 +620,5 @@ main() {
   fi
 }
 
-# Run main function
+# Run the main function
 main "$@"
